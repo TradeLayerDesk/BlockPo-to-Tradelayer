@@ -1062,14 +1062,15 @@ static bool Instant_payment(const uint256& txid, const std::string& buyer, const
     int64_t amount_purchased = ConvertTo64(amountPurchased256);
 
     std::string channelAddr;
-    t_tradelistdb->checkChannelRelation(seller, channelAddr);
+
+    assert(t_tradelistdb->checkChannelRelation(seller, channelAddr));
 
     // retrieving channel struct
     auto it = channels_Map.find(channelAddr);
     Channel& sChn = it->second;
 
     // adding buyer to channel if it wasn't added before
-    if(!sChn.isPartOfChannel(buyer)){
+    if(!sChn.isPartOfChannel(buyer) && sChn.getSecond() == CHANNEL_PENDING){
         sChn.setSecond(buyer);
     }
 
@@ -1168,6 +1169,7 @@ static bool Instant_payment(const uint256& txid, const std::string& buyer, const
 
      return count;
  }
+
 /**
  * Reports the progress of the initial transaction scanning.
  *
@@ -3145,7 +3147,7 @@ bool mastercore_handler_tx(const CTransaction& tx, int nBlock, unsigned int idx,
         else if (interp_ret != PKT_ERROR - 2)
         {
             bool bValid = (0 <= interp_ret);
-            if (interp_ret != 1 && interp_ret != 2) p_txlistdb->recordTX(tx.GetHash(), bValid, nBlock, mp_obj.getType(), mp_obj.getNewAmount(), interp_ret);
+            p_txlistdb->recordTX(tx.GetHash(), bValid, nBlock, mp_obj.getType(), mp_obj.getNewAmount(), interp_ret);
             p_TradeTXDB->RecordTransaction(tx.GetHash(), idx);
 
         }
@@ -6089,9 +6091,10 @@ bool mastercore::makeWithdrawals(int Block)
             assert(it != channels_Map.end());
             Channel &chn = it->second;
 
-            if(!chn.updateChannelBal(address, propertyId, -amount)){
-                PrintToLog("%s(): withdrawal is not possible\n",__func__);
-                ++itt;
+            if(!chn.updateChannelBal(address, propertyId, -amount))
+            {
+                if(msc_debug_make_withdrawal) PrintToLog("%s(): withdrawal is not possible\n",__func__);
+                itt = accepted.erase(itt++);
                 continue;
             }
 
@@ -7224,14 +7227,10 @@ bool CMPTradeList::setChannelClosed(const std::string& channelAddr)
     std::string newValue, strValue;
     Status status = pdb->Get(readoptions, channelAddr, &strValue);
 
-    PrintToLog("%s(): CHECKPOINT 1\n", __func__);
-
     if(!status.ok()){
         PrintToLog("%s(): db error - channel not found\n", __func__);
         return false;
     }
-
-    PrintToLog("%s(): CHECKPOINT 2\n", __func__);
 
     // ensure correct amount of tokens in value string
     boost::split(vstr, strValue, boost::is_any_of(":"), token_compress_on);
@@ -7245,10 +7244,6 @@ bool CMPTradeList::setChannelClosed(const std::string& channelAddr)
     const std::string& secAddr = vstr[1];
 
     newValue = strprintf("%s:%s:%s:%s",frAddr, secAddr, CLOSED_CHANNEL, TYPE_CREATE_CHANNEL);
-
-    PrintToLog("%s(): strValue: %s\n", __func__, strValue);
-    PrintToLog("%s(): newValue: %s\n", __func__, newValue);
-
 
     Status status1 = pdb->Put(writeoptions, channelAddr, newValue);
     ++nWritten;
